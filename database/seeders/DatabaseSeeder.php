@@ -21,6 +21,6 @@ class DatabaseSeeder extends Seeder
             'email' => 'stornblood6969@gmail.com',
         ]);
 
-        Company::factory(20)->create();
+        // Company::factory(20)->create();
     }
 }
