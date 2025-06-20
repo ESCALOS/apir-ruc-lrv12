@@ -2,14 +2,16 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\SearchCompanyByNameRequest;
+use App\Http\Requests\SearchCompanyByRucRequest;
 use App\Models\Company;
 use App\Http\Requests\StoreCompanyRequest;
 use App\Http\Requests\UpdateCompanyRequest;
-use App\Http\Requests\SearchCompanyRequest;
 use App\Http\Resources\CompanyResource;
 use App\Http\Resources\CompanyCollection;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\DB;
 
 class CompanyController extends Controller
 {
@@ -17,19 +19,30 @@ class CompanyController extends Controller
      * Display a listing of the resource.
      */
     public function index(Request $request): JsonResponse
-    {
-        $query = Company::query();
+{
+    $query = Company::query();
 
-        // Búsqueda solo por RUC (quitar espacios)
-        if ($request->has('ruc')) {
-            $searchRuc = str_replace(' ', '', $request->ruc);
-            $query->whereRaw('REPLACE(ruc, " ", "") LIKE ?', ['%' . $searchRuc . '%']);
+    // Si se pasa RUC, limpiamos y comparamos de forma exacta
+    if ($request->filled('ruc')) {
+        $ruc = trim($request->ruc);
+
+        // Solo si tiene exactamente 11 dígitos numéricos
+        if (preg_match('/^\d{11}$/', $ruc)) {
+            $query->where('ruc', $ruc);
+        } else {
+            return response()->json([
+                'success' => false,
+                'message' => 'El RUC debe tener exactamente 11 dígitos numéricos.',
+            ], 422);
         }
-
-        $companies = $query->paginate(15);
-
-        return (new CompanyCollection($companies))->response();
     }
+
+    $companies = $query->paginate(15);
+
+    return (new CompanyCollection($companies))
+        ->additional(['success' => true])
+        ->response();
+}
 
     /**
      * Store a newly created resource in storage.
@@ -88,7 +101,7 @@ class CompanyController extends Controller
     /**
      * Search companies by RUC
      */
-    public function searchByRuc(SearchCompanyRequest $request): JsonResponse
+    public function searchByRuc(SearchCompanyByRucRequest $request): JsonResponse
     {
         if (!$request->validateRuc()) {
             return response()->json([
@@ -105,50 +118,50 @@ class CompanyController extends Controller
             ->response();
     }
 
-    /**
-     * Search companies by name (razón social)
-     */
-    public function searchByName(SearchCompanyRequest $request): JsonResponse
+    public function searchPerson(SearchCompanyByNameRequest $request)
     {
-        $searchName = $this->normalizeText($request->name);
-        
-        $companies = Company::whereRaw(
-            'UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(name, ".", ""), "á", "A"), "é", "E"), "í", "I"), "ó", "O"), "ú", "U"), "ñ", "N")) LIKE ?',
-            ['%' . $searchName . '%']
-        )->get();
-
-        return CompanyResource::collection($companies)
-            ->additional(['success' => true])
-            ->response();
+        return $this->searchByType($request, '10');
     }
 
-    /**
-     * Normalizar texto removiendo acentos, puntos y convirtiendo a mayúsculas
-     */
-    private function normalizeText(string $text): string
+    public function searchBusiness(SearchCompanyByNameRequest $request)
     {
-        $text = trim($text);
-        $text = strtoupper($text);
-        
-        // Primero remover puntos
-        $text = str_replace('.', '', $text);
-        
-        // Luego remover acentos
-        $unwanted_array = [
-            'Á' => 'A', 'À' => 'A', 'Ä' => 'A', 'Â' => 'A', 'Ā' => 'A', 'Ã' => 'A',
-            'É' => 'E', 'È' => 'E', 'Ë' => 'E', 'Ê' => 'E', 'Ē' => 'E',
-            'Í' => 'I', 'Ì' => 'I', 'Ï' => 'I', 'Î' => 'I', 'Ī' => 'I',
-            'Ó' => 'O', 'Ò' => 'O', 'Ö' => 'O', 'Ô' => 'O', 'Ō' => 'O', 'Õ' => 'O',
-            'Ú' => 'U', 'Ù' => 'U', 'Ü' => 'U', 'Û' => 'U', 'Ū' => 'U',
-            'Ñ' => 'N',
-            'á' => 'A', 'à' => 'A', 'ä' => 'A', 'â' => 'A', 'ā' => 'A', 'ã' => 'A',
-            'é' => 'E', 'è' => 'E', 'ë' => 'E', 'ê' => 'E', 'ē' => 'E',
-            'í' => 'I', 'ì' => 'I', 'ï' => 'I', 'î' => 'I', 'ī' => 'I',
-            'ó' => 'O', 'ò' => 'O', 'ö' => 'O', 'ô' => 'O', 'ō' => 'O', 'õ' => 'O',
-            'ú' => 'U', 'ù' => 'U', 'ü' => 'U', 'û' => 'U', 'ū' => 'U',
-            'ñ' => 'N'
+        return $this->searchByType($request, '20');
+    }
+
+    private function searchByType(SearchCompanyByNameRequest $request, string $type)
+    {
+        $input = $request->get('query');
+
+        if (!$input) {
+            return response()->json(['error' => 'Empty query'], 422);
+        }
+
+        $normalized = $this->normalizeName($input);
+
+        $company = DB::table('companies')
+            ->select('ruc', 'name')
+            ->where('type', $type)
+            ->where('name', $normalized)
+            ->first();
+
+        return response()->json($company ?? []);
+    }
+
+    private function normalizeName(string $input): string
+    {
+        $map = [
+            '/\bS[\.\s]?A[\.\s]?C\b/i'     => 'S.A.C.',
+            '/\bE[\.\s]?I[\.\s]?R[\.\s]?L\b/i' => 'E.I.R.L.',
+            '/\bS[\.\s]?R[\.\s]?L\b/i'     => 'S.R.L.',
+            '/\bS[\.\s]?A\b/i'             => 'S.A.',
         ];
-        
-        return strtr($text, $unwanted_array);
+
+        $normalized = strtoupper($input);
+
+        foreach ($map as $pattern => $replacement) {
+            $normalized = preg_replace($pattern, $replacement, $normalized);
+        }
+
+        return preg_replace('/\s+/', ' ', trim($normalized));
     }
 }

@@ -19,7 +19,7 @@ class CompanyImporter extends Importer
                 ->rules(['required', 'max:11', 'unique:companies,ruc']),
             ImportColumn::make('name')
                 ->requiredMapping()
-                ->rules(['required', 'max:255', 'unique:companies,name']),
+                ->rules(['required', 'max:255']),
         ];
     }
 
@@ -28,7 +28,6 @@ class CompanyImporter extends Importer
         return Company::firstOrNew([
             // Update existing records, matching them by `$this->data['column_name']`
             'ruc' => $this->data['ruc'],
-            'name' => $this->data['name'],
         ]);
 
         // return new Company();
